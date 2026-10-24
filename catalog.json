@@ -1,0 +1,25 @@
+[
+  {
+    "id": "miaddon:big-buck-bunny",
+    "type": "movie",
+    "name": "Big Buck Bunny",
+    "aliases": [
+      "Gran conejo",
+      "Conejo"
+    ],
+    "poster": "https://upload.wikimedia.org/wikipedia/commons/c/c5/Big_buck_bunny_poster_big.jpg",
+    "posterShape": "poster",
+    "description": "Cortometraje de animación para probar el catálogo y el reproductor. © 2008 Blender Foundation / www.bigbuckbunny.org. Licencia CC BY 3.0; se conserva la película completa con sus créditos.",
+    "releaseInfo": "2008",
+    "genres": [
+      "Animación"
+    ],
+    "streams": [
+      {
+        "name": "Mi Addon · 720p",
+        "title": "Big Buck Bunny · MP4 H.264 / AAC · Demostración",
+        "url": "https://uploads.video-commander.com/sample/BigBuckBunny.mp4"
+      }
+    ]
+  }
+]

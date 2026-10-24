@@ -1,0 +1,8 @@
+{
+  "id": "org.personal.miaddon",
+  "name": "Mi Addon",
+  "version": "0.1.0",
+  "description": "Catálogo personal con búsqueda y reproducción directa. Incluye una película de demostración.",
+  "idPrefix": "miaddon:",
+  "pageSize": 100
+}
