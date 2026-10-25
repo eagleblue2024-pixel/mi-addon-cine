@@ -1,8 +1,1 @@
-{
-  "id": "org.personal.miaddon",
-  "name": "Mi Addon",
-  "version": "0.1.0",
-  "description": "Catálogo personal con búsqueda y reproducción directa. Incluye una película de demostración.",
-  "idPrefix": "miaddon:",
-  "pageSize": 100
-}
+{"id":"org.personal.miaddon","name":"Nebula Play","version":"0.1.1","description":"Nebula Play: tu universo de películas y series. Catálogo personal de demostración con búsqueda y reproducción directa.","idPrefix":"miaddon:","pageSize":100}
