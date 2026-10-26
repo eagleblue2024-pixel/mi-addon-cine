@@ -14,7 +14,7 @@ module.exports = async (req, res) => {
         const data = JSON.parse(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
         if (Array.isArray(data.streams)) {
           if (!data.streams.some(stream => stream.url === testUrl)) {
-            data.streams.push({name: 'Nebula Play', title: 'El último mercenario | HLS adicional de prueba | enlace fijo', url: testUrl, behaviorHints: {notWebReady: true}});
+            data.streams.push({name: 'Nebula Play ⭐', title: '⭐ El último mercenario | HLS adicional de prueba | enlace fijo', url: testUrl, behaviorHints: {notWebReady: true}});
           }
           delete data.error;
           chunk = JSON.stringify(data);
