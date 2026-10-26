@@ -1,7 +1,7 @@
 'use strict';
 const original = require('./nebula-play');
 const targetRoute = 'stream/movie/tt12808182.json';
-const testUrl = 'https://hanerix.com/stream/DHKjx4OU6qF9Vh_AWEqsdg/kjhhiuahiuhgihdf/1793075911/59214632/master.m3u8';
+const testUrl = 'https://vibuxer.com/stream/C2pdiSLOr4vL3TU8rUZS-g/kjhhiuahiuhgihdf/1793083491/59214632/master.m3u8';
 module.exports = async (req, res) => {
   let route;
   try { route = decodeURIComponent(String(req.query?.route || '')).replace(/^\/+|\/+$/g, ''); }
