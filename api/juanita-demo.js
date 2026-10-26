@@ -1,62 +1,55 @@
 'use strict';
-const id = 'njdemo:moana';
-let cached;
-const manifest = {id: 'org.nebulaplay.juanita.demo', version: '0.1.0', name: 'Nebula Play - Prueba Juanita', description: 'Prueba experimental de reproducción de un solo título. No es un catálogo completo.', resources: ['catalog', 'meta', 'stream'], types: ['movie'], idPrefixes: ['njdemo:'], catalogs: [{type: 'movie', id: 'juanita-demo', name: 'Prueba Juanita'}]};
-const meta = {id, type: 'movie', name: 'Moana - prueba PelisJuanita', description: 'Caso único de prueba. Abre esta ficha y selecciona el stream de PelisJuanita. La reproducción todavía debe verificarse en Nuvio.'};
-function decode(s) { return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/').replace(/\\u0026/g, '&'); }
-function find(html, origin, path) {
-  for (const m of decode(html).matchAll(/https?:\/\/[^\s"'<>\\`]+/gi)) {
-    try { const u = new URL(m[0]); if (u.origin === origin && u.pathname === path && !u.username && !u.password) return u.href; } catch {}
-  }
-  return null;
+const site = 'https://pelisjuanita.org', memo = new Map(), states = new Map();
+const manifest = {id:'org.nebulaplay.juanita.demo',version:'0.3.0',name:'Nebula Play - Prueba Juanita',description:'Películas con portadas y prioridad de calidad. Navegación experimental mediante enlaces publicados por la web; no garantiza cobertura completa.',resources:['catalog','meta','stream'],types:['movie'],idPrefixes:['njdemo:'],catalogs:[{type:'movie',id:'juanita-demo',name:'PelisJuanita',extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]}]};
+function dec(s) { return String(s||'').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#0*39;/g,"'").replace(/\\\//g,'/').replace(/\\u002[fF]/g,'/').replace(/\\u0026/g,'&'); }
+function clean(s) { return dec(s).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(); }
+function attr(s,k) { const m=s.match(new RegExp('(?:^|\\s)'+k+'\\s*=\\s*([\"\'])(.*?)\\1','i')); return m?dec(m[2]):''; }
+function link(s,base=site) { try { if(!s)return null;const u=new URL(dec(s),base);return u.protocol==='https:'&&!u.username&&!u.password?u:null; }catch{return null;} }
+function id(slug){return 'njdemo:'+(slug==='moana-2026'?'moana':slug);}
+function cached(key,ttl,task){const old=memo.get(key);if(old&&old.until>Date.now())return old.value;if(memo.size>150)memo.clear();const value=Promise.resolve().then(task).catch(e=>{memo.delete(key);throw e;});memo.set(key,{until:Date.now()+ttl,value});return value;}
+async function read(raw,referer,signal,limit=1048576){
+ const u=link(raw);if(!u||!([site,'https://videoapp.mov','https://vimeos.net'].includes(u.origin)||/^s[0-9]+\.vimeos\.net$/.test(u.hostname)&&!u.port))throw Error('unsupported_origin');
+ const headers={Accept:'text/html, application/vnd.apple.mpegurl, text/plain','User-Agent':'NebulaPlayDemo/0.1'};if(referer)headers.Referer=referer;
+ const r=await fetch(u,{redirect:'manual',signal,headers});if(!r.ok||r.headers.get('cf-mitigated')==='challenge'){if(r.body)await r.body.cancel();throw Error('upstream_unavailable');}if(!r.body)throw Error('empty_body');
+ const parts=[];let size=0;const reader=r.body.getReader();try{while(size<limit){const {done,value}=await reader.read();if(done)break;const part=value.subarray(0,limit-size);parts.push(Buffer.from(part));size+=part.length;}}finally{await reader.cancel().catch(()=>{});}if(size>=limit)throw Error('page_limit');return Buffer.concat(parts).toString('utf8');
 }
-async function resolve() {
-  const signal = AbortSignal.timeout(15000);
-  async function read(url, referer) {
-    const u = new URL(url);
-    if (!['https://videoapp.mov', 'https://vimeos.net'].includes(u.origin) || u.username || u.password) throw new Error('unsupported_origin');
-    const r = await fetch(u, {redirect: 'manual', signal, headers: {Accept: 'text/html', Referer: referer, 'User-Agent': 'NebulaPlayDemo/0.1'}});
-    if (!r.ok || r.headers.get('cf-mitigated') === 'challenge') { if (r.body) await r.body.cancel(); throw new Error('upstream_unavailable'); }
-    const reader = r.body.getReader(), parts = []; let size = 0;
-    try {
-      while (size < 524288) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        const part = value.subarray(0, 524288 - size); parts.push(Buffer.from(part)); size += part.length;
-      }
-    } finally { await reader.cancel().catch(() => {}); }
-    if (size >= 524288) throw new Error('page_limit');
-    return Buffer.concat(parts).toString('utf8');
-  }
-  const html = await read('https://videoapp.mov/e/movie/1108427', 'https://pelisjuanita.org/');
-  const player = find(html, 'https://vimeos.net', '/embed-rxqr2clfd240.html');
-  if (!player) throw new Error('player_not_found');
-  const body = await read(player, 'https://videoapp.mov/');
-  const url = find(body, 'https://s9.vimeos.net', '/hls2/03/00013/rxqr2clfd240_,n,h,.urlset/master.m3u8');
-  if (!url) throw new Error('hls_not_found');
-  return url;
+function find(html,predicate){for(const m of dec(html).matchAll(/https?:\/\/[^\s"'<>\\`]+/gi)){const u=link(m[0]);if(u&&predicate(u))return u.href;}return null;}
+function anchors(html){return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)].map(m=>({tag:m[1],body:m[2],url:link(attr(m[1],'href'))}));}
+function cards(html){const items=new Map();for(const a of anchors(html)){if(!a.url||a.url.origin!==site)continue;const m=a.url.pathname.match(/^\/pelicula\/([a-z0-9-]{1,120})\/?$/);if(!m)continue;const img=(a.body.match(/<img\b[^>]*>/i)||[])[0]||'';const poster=link(attr(img,'data-src')||attr(img,'data-lazy-src')||attr(img,'src'));const heading=(a.body.match(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/i)||[])[1];const item={id:id(m[1]),type:'movie',name:clean(attr(img,'alt')||attr(a.tag,'title')||heading||m[1].replace(/-/g,' ')).slice(0,160),poster:poster?.href,posterShape:'poster'};const old=items.get(item.id);if(!old||!old.poster&&item.poster)items.set(item.id,item);}return [...items.values()];}
+function metaFrom(html,slug){const tags=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);function val(k){const t=tags.find(t=>attr(t,'property')===k||attr(t,'name')===k);return t?attr(t,'content'):'';}const poster=link(val('og:image')||val('twitter:image'));const heading=(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)||[])[1];return {id:id(slug),type:'movie',name:clean(val('og:title')||heading||slug.replace(/-/g,' ')).replace(/^Pel[ií]cula\s+/i,'').replace(/\s*[—|]\s*(?:Online|PelisJuanita).*$/i,'').slice(0,160),poster:poster?.href,posterShape:'poster',description:clean(val('og:description')||val('description')).slice(0,2000)};}
+function detail(slug){return cached('meta:'+slug,60000,async()=>metaFrom(await read(site+'/pelicula/'+slug,null,AbortSignal.timeout(10000)),slug));}
+function nextPage(html,current){for(const a of anchors(html)){if(!a.url||a.url.origin!==site||a.url.href===current)continue;if(/\bnext\b/i.test(attr(a.tag,'rel'))||/^(siguiente|next|siguiente página|página siguiente)\s*[»›→]*$/i.test(clean(a.body))||/^(next|siguiente)/i.test(attr(a.tag,'aria-label')))return a.url.href;}for(const m of html.matchAll(/<link\b[^>]*>/gi)){if(/\bnext\b/i.test(attr(m[0],'rel'))){const u=link(attr(m[0],'href'));if(u?.origin===site&&u.href!==current)return u.href;}}return null;}
+function searchUrl(html,term){for(const f of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form\s*>/gi)){if(!/^get$/i.test(attr(f[1],'method')||'get'))continue;const u=link(attr(f[1],'action')||'/');if(!u||u.origin!==site)continue;let found=false;for(const m of f[2].matchAll(/<input\b[^>]*>/gi)){const name=attr(m[0],'name');if(/^(q|s|search|query|keyword)$/i.test(name)){u.searchParams.set(name,term);found=true;}else if(name&&/^hidden$/i.test(attr(m[0],'type')))u.searchParams.set(name,attr(m[0],'value'));}if(found)return u.href;}return null;}
+async function catalog(term,skip){
+ const signal=AbortSignal.timeout(20000);let state=states.get(term);if(!state||state.until<Date.now()){
+  const home=await cached('home',60000,()=>read(site+'/',null,signal));let start=site+'/';
+  if(term){start=searchUrl(home,term);if(!start)throw Error('search_route_not_found');}
+  else{const a=anchors(home).find(a=>a.url?.origin===site&&/^\/(pelicula|peliculas|movies)\/?$/.test(a.url.pathname));if(a)start=a.url.href;}
+  state={until:Date.now()+300000,items:[],seen:new Set(),visited:new Set(),next:start,ended:false};if(states.size>=20)states.clear();states.set(term,state);
+ }
+ for(let n=0;n<6&&state.items.length<skip+30&&state.next;n++){
+  const current=state.next;if(state.visited.has(current)){state.next=null;break;}
+  const html=await read(current,null,signal);state.visited.add(current);
+  for(const item of cards(html)){if(!state.seen.has(item.id)){state.seen.add(item.id);state.items.push(item);}}
+  state.next=nextPage(html,current);state.ended=!state.next;
+ }
+ if(!term&&skip===0&&!state.seen.has('njdemo:moana')){try{const moana=await detail('moana-2026');state.items.unshift(moana);state.seen.add(moana.id);}catch{state.items.unshift({id:'njdemo:moana',type:'movie',name:'Moana - prueba confirmada'});state.seen.add('njdemo:moana');}}
+ return {metas:state.items.slice(skip,skip+30),navigationStatus:state.next?'more_pages_discovered':'no_more_html_links',note:'La navegación depende de enlaces HTML publicados por la web; no implica cobertura completa del catálogo.'};
 }
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  const send = (status, data) => { res.statusCode = status; res.end(JSON.stringify(data)); };
-  if (req.method === 'OPTIONS') { res.statusCode = 204; return res.end(); }
-  if (req.method !== 'GET') { res.setHeader('Allow', 'GET, OPTIONS'); return send(405, {error: 'Solo GET'}); }
-  let route;
-  try { route = decodeURIComponent(String(req.query.route || '')).replace(/^\/+|\/+$/g, ''); } catch { return send(400, {error: 'Ruta inválida'}); }
-  if (route === 'manifest.json') return send(200, manifest);
-  if (route === 'catalog/movie/juanita-demo.json') return send(200, {metas: [meta]});
-  if (route === 'meta/movie/' + id + '.json') return send(200, {meta});
-  if (route === 'stream/movie/' + id + '.json') {
-    try {
-      if (!cached || cached.until < Date.now()) cached = {until: Date.now() + 15000, result: resolve()};
-      const url = await cached.result;
-      return send(200, {streams: [{name: 'PelisJuanita - prueba', title: 'Moana | HLS directo | reproducción experimental', url, behaviorHints: {notWebReady: true}}]});
-    } catch (e) { cached = null; return send(200, {streams: [], error: e.name === 'TimeoutError' ? 'Tiempo de espera agotado' : 'No se pudo extraer el stream en esta solicitud'}); }
-  }
-  return send(404, {error: 'Ruta no disponible en esta prueba de un solo título'});
+function hlsAttrs(line){const out={};for(const m of line.matchAll(/([A-Z0-9-]+)=("[^"]*"|[^,]*)/g))out[m[1]]=m[2].replace(/^"|"$/g,'');return out;}
+function variants(text,base){const lines=text.split(/\r?\n/),out=[];for(let i=0;i<lines.length;i++){if(!lines[i].startsWith('#EXT-X-STREAM-INF:'))continue;const a=hlsAttrs(lines[i]);let j=i+1;while(j<lines.length&&(!lines[j].trim()||lines[j].trim().startsWith('#')))j++;if(j>=lines.length)continue;const u=link(lines[j].trim(),base);if(!u||!/^s[0-9]+\.vimeos\.net$/.test(u.hostname)||u.port)continue;const [w,h]=(a.RESOLUTION||'0x0').split('x').map(Number);out.push({url:u.href,w:w||0,h:h||0,bandwidth:Number(a.BANDWIDTH)||0,audio:a.AUDIO});}return out.sort((a,b)=>b.h-a.h||b.w-a.w||b.bandwidth-a.bandwidth);}
+function streams(slug){return cached('streams:'+slug,15000,async()=>{
+ const signal=AbortSignal.timeout(20000);let embed;
+ if(slug==='moana-2026')embed='https://videoapp.mov/e/movie/1108427';else embed=find(await read(site+'/pelicula/'+slug,null,signal),u=>u.origin==='https://videoapp.mov'&&/^\/e\/movie\/\d+\/?$/.test(u.pathname));
+ if(!embed)throw Error('embed_not_found');const html=await read(embed,site+'/',signal);
+ let player=find(html,u=>u.origin==='https://vimeos.net'&&/^\/embed-[a-z0-9]+\.html$/i.test(u.pathname));if(slug==='moana-2026')player=find(html,u=>u.origin==='https://vimeos.net'&&u.pathname==='/embed-rxqr2clfd240.html')||player;
+ if(!player)throw Error('player_not_found');const body=await read(player,'https://videoapp.mov/',signal);const url=find(body,u=>/^s[0-9]+\.vimeos\.net$/.test(u.hostname)&&!u.port&&/\/master\.m3u8$/.test(u.pathname));if(!url)throw Error('hls_not_found');
+ const master={name:'PelisJuanita',title:'HLS original | alternativa automática',url,behaviorHints:{notWebReady:true}};
+ try{const text=await read(url,'https://vimeos.net/',signal,262144);if(!text.trimStart().startsWith('#EXTM3U'))return [master];const list=variants(text,url);const safe=list.filter(v=>!v.audio||![...text.matchAll(/#EXT-X-MEDIA:([^\r\n]*)/g)].some(m=>{const a=hlsAttrs(m[1]);return a.TYPE==='AUDIO'&&a['GROUP-ID']===v.audio&&a.URI;}));const direct=safe.map((v,i)=>({name:'PelisJuanita'+(v.h?' '+v.h+'p':''),title:(i===0?'Máxima calidad disponible':'Calidad alternativa')+(v.h?' | '+v.w+'×'+v.h:''),url:v.url,behaviorHints:{notWebReady:true}}));return [...direct,master];}catch{return [master];}
+});}
+module.exports=async(req,res)=>{
+ res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type');res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('X-Content-Type-Options','nosniff');const send=(status,data)=>{res.statusCode=status;res.end(JSON.stringify(data));};if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}if(req.method!=='GET'){res.setHeader('Allow','GET, OPTIONS');return send(405,{error:'Solo GET'});}
+ let route;try{route=decodeURIComponent(String(req.query.route||'')).replace(/^\/+|\/+$/g,'');}catch{return send(400,{error:'invalid_route'});}if(route==='manifest.json')return send(200,manifest);
+ const c=route.match(/^catalog\/movie\/juanita-demo(?:\/(.*))?\.json$/);if(c){const extras=new URLSearchParams(c[1]||'');const term=String(extras.get('search')||req.query.search||'').slice(0,150).trim();const skip=Number(extras.get('skip')||req.query.skip||0);if(!Number.isSafeInteger(skip)||skip<0)return send(400,{metas:[],error:'invalid_skip'});try{return send(200,await catalog(term,skip));}catch(e){if(!term&&skip===0){let moana={id:'njdemo:moana',type:'movie',name:'Moana - prueba confirmada'};try{moana=await detail('moana-2026');}catch{}return send(200,{metas:[moana],error:e.message==='search_route_not_found'?'search_route_not_found':'catalog_unavailable'});}return send(200,{metas:[],error:e.message==='search_route_not_found'?'search_route_not_found':'catalog_unavailable'});}}
+ const m=route.match(/^(meta|stream)\/movie\/njdemo:([a-z0-9-]{1,120})\.json$/);if(!m)return send(404,{error:'route_not_found'});const slug=m[2]==='moana'?'moana-2026':m[2];if(m[1]==='meta'){try{return send(200,{meta:await detail(slug)});}catch{return send(200,{meta:{id:id(slug),type:'movie',name:slug.replace(/-/g,' ')},error:'metadata_unavailable'});}}try{return send(200,{streams:await streams(slug)});}catch{return send(200,{streams:[],error:'Videoapp/Vimeos no pudo resolverse para este título'});}
 };
