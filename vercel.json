@@ -1,6 +1,7 @@
 {
   "version": 2,
   "rewrites": [
+    {"source": "/nebula/:path*", "destination": "/api/nebula-play?route=:path*"},
     {"source": "/juanita-demo/:path*", "destination": "/api/nebula-play?route=:path*"},
     {"source": "/", "destination": "/api/index?route="},
     {"source": "/manifest.json", "destination": "/api/index?route=manifest.json"},
