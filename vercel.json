@@ -1,30 +1,13 @@
 {
   "version": 2,
   "rewrites": [
-    {
-      "source": "/",
-      "destination": "/api/index?route="
-    },
-    {
-      "source": "/manifest.json",
-      "destination": "/api/index?route=manifest.json"
-    },
-    {
-      "source": "/health",
-      "destination": "/api/index?route=health"
-    },
-    {
-      "source": "/catalog/:path*",
-      "destination": "/api/index?route=catalog/:path*"
-    },
-    {
-      "source": "/meta/:path*",
-      "destination": "/api/index?route=meta/:path*"
-    },
-    {
-      "source": "/stream/:path*",
-      "destination": "/api/index?route=stream/:path*"
-    }
+    {"source": "/juanita-demo/:path*", "destination": "/api/juanita-demo?route=:path*"},
+    {"source": "/", "destination": "/api/index?route="},
+    {"source": "/manifest.json", "destination": "/api/index?route=manifest.json"},
+    {"source": "/health", "destination": "/api/index?route=health"},
+    {"source": "/catalog/:path*", "destination": "/api/index?route=catalog/:path*"},
+    {"source": "/meta/:path*", "destination": "/api/index?route=meta/:path*"},
+    {"source": "/stream/:path*", "destination": "/api/index?route=stream/:path*"}
   ],
   "outputDirectory": "public"
 }
