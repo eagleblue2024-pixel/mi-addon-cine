@@ -16,6 +16,6 @@ module.exports = async (req, res) => {
     }
     const html=Buffer.concat(parts).toString('utf8');
     const verification=r.headers.get('cf-mitigated')==='challenge'||/cf-chl-|g-recaptcha|altcha-widget|verify you are human/i.test(html);
-    return send(200,{pageUrl, upstreamStatus:r.status, contentType:r.headers.get('content-type'), sampledBytes:size, possiblyTruncated:size>=1000000, verificationDetected:verification, status:verification?'verification_required':!r.ok?'upstream_http_error':'html_received', packedScriptDetected:/eval\(function\(p,a,c,k,e,d\)/.test(html), playerDetected:/jwplayer/.test(html), notice:'Solo diagnostica acceso. No ejecuta scripts ni modifica las fuentes de Nebula.'});
+    return send(200,{diagnosticVersion:2, pageUrl, upstreamStatus:r.status, contentType:r.headers.get('content-type'), sampledBytes:size, possiblyTruncated:size>=1000000, verificationDetected:verification, status:verification?'verification_required':!r.ok?'upstream_http_error':'html_received', packedScriptDetected:/eval\(function\(p,a,c,k,e,d\)/.test(html), playerDetected:/jwplayer/.test(html), htmlSample:html.slice(0,4096), htmlSampleTruncated:html.length>4096, notice:'Solo diagnostica acceso. Muestra HTML como texto JSON; no ejecuta scripts ni modifica las fuentes de Nebula.'});
   } catch(e) { return send(502,{pageUrl,status:'fetch_failed',errorType:e.name}); }
 };
