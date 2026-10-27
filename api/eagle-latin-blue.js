@@ -214,3 +214,4 @@ async function inspectHosts(includeStreams=false,probeSegments=false){
  out.notice='Diagnóstico 11: solo VidhidePro de Idiotas, Voe excluido. Mantiene extracción estática, validación de destinos, siete segundos por lectura y 22 totales. Solo en diagnostics/hosts.json solicita una muestra del primer segmento TS validado de cada vídeo, Range bytes=0-4095, conserva como máximo 4096 bytes y cancela la lectura; el servidor remoto podría ignorar Range y el transporte recibir más datos antes de cancelar. Sin redirecciones de segmentos, claves, hls3 ni exposición de firmas o contenido binario. Un HTTP 200/206 o sincronía TS desde Vercel no verifica decodificación ni reproducción desde el teléfono. Las rutas de reproducción y Hanerix permanecen sin cambios.';
  return out;
 }
+module.exports=require('../lib/eagle-vidhide-playlist-test').wrap(module.exports,inspectHosts);
