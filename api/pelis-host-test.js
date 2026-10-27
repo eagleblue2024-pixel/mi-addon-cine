@@ -1,8 +1,8 @@
 'use strict';
 const PAGE='https://hanerix.com/e/ejfrl3vz4rbs';
 const HOSTS=new Set(['hanerix.com','cyyroro04xrqr.riskanalytics.cfd','cyyroro04xrqr.premilkyway.com']);
-const CDN='p19-ad-site-sign-sg.tiktokcdn.com';
-function safe(raw,base=PAGE,segment=false){const u=new URL(raw,base);if(u.protocol!=='https:'||u.port||u.username||u.password||!(segment?u.hostname===CDN:HOSTS.has(u.hostname)))throw new Error('destination_not_allowed');return u.href;}
+const CDNS=new Set(['p19-ad-site-sign-sg.tiktokcdn.com','p16-ad-site-sign-sg.tiktokcdn.com']);
+function safe(raw,base=PAGE,segment=false){const u=new URL(raw,base);if(u.protocol!=='https:'||u.port||u.username||u.password||!(segment?CDNS.has(u.hostname):HOSTS.has(u.hostname)))throw new Error('destination_not_allowed');return u.href;}
 async function read(url,max,segment=false){
  const r=await fetch(safe(url,PAGE,segment),{redirect:'manual',signal:AbortSignal.timeout(6000),headers:{Accept:'*/*','User-Agent':'NebulaPlayDiagnostics/0.4',Referer:PAGE,...(segment?{Range:'bytes=0-16383'}:{})}});
  const parts=[];let size=0,complete=false;
@@ -52,7 +52,7 @@ async function checkSegment(uri,base,index){
 }
 module.exports=async(req,res)=>{
  res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
- const out={diagnosticVersion:12,experimental:true,playbackVerified:false,pageUrl:PAGE,playlistCheck:{status:'not_checked'},variantCheck:{status:'not_checked'},segmentChecks:[],notice:'Segundo segmento y uno a mitad de la lista, hasta 16 KiB cada uno (máximo 32 KiB leídos de segmentos). Inspección independiente PNG y TS sin desplazamiento fijo. No transforma contenido ni confirma reproducción. Sin nuevos hosts, redirecciones, claves, inicialización ni cambios en fuentes.'};
+ const out={diagnosticVersion:13,experimental:true,playbackVerified:false,pageUrl:PAGE,playlistCheck:{status:'not_checked'},variantCheck:{status:'not_checked'},segmentChecks:[],notice:'Segundo segmento y uno a mitad de la lista, hasta 16 KiB cada uno (máximo 32 KiB leídos de segmentos). Inspección independiente PNG y TS sin desplazamiento fijo. Solo hosts CDN exactos p19 y p16 autorizados. No transforma contenido ni confirma reproducción. Sin redirecciones, claves, inicialización ni cambios en fuentes.'};
  const send=code=>{res.statusCode=code;res.end(JSON.stringify(out,null,2));};if(req.method!=='GET'){res.setHeader('Allow','GET');out.status='method_not_allowed';return send(405);}let stage='page';try{
  const page=await read(PAGE,1000000);if(page.challenge||/cf-chl-|g-recaptcha|altcha-widget|verify you are human/i.test(page.text)){out.status='verification_required';return send(200);}if(!page.ok||page.possiblyTruncated||!/text\/html/i.test(page.contentType||'')){out.status='page_not_usable';out.pageCheck=info(page);return send(200);}
  stage='extraction';out.links=unpackLinks(page.text);out.status=Object.keys(out.links).length?'links_extracted':'no_links';if(!out.links.hls4)return send(200);
