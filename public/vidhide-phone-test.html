@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self' https://*.acek-cdn.com https://*.dramiyos-cdn.com; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Prueba Vidhide desde el teléfono</title>
+<style>body{font:16px system-ui;max-width:800px;margin:24px auto;padding:0 16px;background:#101827;color:#edf2fa}button,select{font:inherit;padding:12px;margin:6px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#18243a;padding:12px}p{line-height:1.5}</style>
+<h1>Prueba Vidhide desde el teléfono</h1><p>Solo Idiotas. No modifica Nuvio ni retransmite vídeo. Al pulsar, obtiene una opción fresca del addon e intenta leer su lista y hasta 4096 bytes del primer segmento desde este navegador. No reproduce la película.</p><p>Usa las cabeceras normales del navegador, no las de Nuvio ni las del reproductor original. Un bloqueo CORS, de red, TLS o de redirección puede impedir conocer el estado HTTP: en ese caso el resultado no será concluyente. Una muestra recibida tampoco verifica reproducción. Si el CDN ignora Range, la red podría recibir más bytes antes de cancelar.</p>
+<label>Opción <select id="choice"><option value="tm9efwej4bv8">Español Latino</option><option value="h7lvwnfyrtnj">Subtitulado</option></select></label><br><button id="run">Iniciar prueba</button> <button id="copy" disabled>Copiar resultado</button><p id="state">No se ha realizado ninguna petición de prueba.</p><pre id="out"></pre>
+<script>
+'use strict';
+const byId=id=>document.getElementById(id),run=byId('run'),copy=byId('copy'),choice=byId('choice'),state=byId('state'),out=byId('out');let report=null;
+function safe(raw,base){try{const u=new URL(raw,base);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&u.search.length<=2048?u:null;}catch{return null;}}
+function childAllowed(u,code){return Boolean(u&&/^[a-z0-9]{8,32}\.(?:acek-cdn|dramiyos-cdn)\.com$/.test(u.hostname)&&new RegExp('^/hls2/[0-9]{2}/[0-9]{1,8}/'+code+'_n/[A-Za-z0-9_-]{1,100}\\.m3u8$').test(u.pathname)&&!u.pathname.endsWith('/master.m3u8'));}
+function firstSegment(text,child){
+ if(!/^\uFEFF?\s*#EXTM3U(?:\s|$)/.test(text)||!/#EXT-X-ENDLIST(?:\s|$)/.test(text)||/^#EXT-X-(?:KEY|SESSION-KEY|MAP|DEFINE|CONTENT-STEERING|STREAM-INF|I-FRAMES-ONLY)(?::|$)/m.test(text)||/\b[A-Z0-9-]*URI\s*=/.test(text))throw Error('unsupported_playlist');
+ const directory=child.pathname.slice(0,child.pathname.lastIndexOf('/')+1);let first=null,count=0;
+ for(const line of text.split(/\r?\n/).map(s=>s.trim())){if(!line||line.startsWith('#'))continue;const u=safe(line,child.href);if(line.includes('{$')||!u||u.origin!==child.origin||!u.pathname.startsWith(directory)||!/^[A-Za-z0-9_-]{1,160}\.ts$/.test(u.pathname.slice(directory.length)))throw Error('unsafe_segment_reference');if(!first)first=u;if(++count>10000)throw Error('too_many_segments');}
+ if(!first)throw Error('no_segment');return first;
+}
+async function sample(target,stage,limit,signal,partial=false){
+ const record={stage,httpStatus:null,sampledBytes:0};report.requests.push(record);
+ let r;try{r=await fetch(target,{mode:'cors',credentials:'omit',cache:'no-store',redirect:'error',signal,headers:partial?{Range:'bytes=0-4095'}:{}});}catch(e){record.result='not_observable_cors_network_tls_redirect_or_timeout';throw e;}
+ record.httpStatus=r.status;record.contentType=(r.headers.get('content-type')||'').slice(0,120);
+ if(!r.ok){if(r.body)await r.body.cancel().catch(()=>{});record.result='http_rejection';throw Error('http_rejection');}
+ const chunks=[];let size=0,complete=false;
+ if(r.body){const reader=r.body.getReader();try{while(size<limit){const {done,value}=await reader.read();if(done){complete=true;break;}const part=value.subarray(0,limit-size);chunks.push(part.slice());size+=part.length;}}finally{await reader.cancel().catch(()=>{});}}
+ record.sampledBytes=size;record.responseBodyComplete=complete;
+ if(!partial&&!complete){record.result='response_limit_reached';throw Error('response_limit_reached');}
+ const bytes=new Uint8Array(size);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.length;}record.result='sample_received';return bytes;
+}
+run.onclick=async()=>{
+ run.disabled=true;choice.disabled=true;copy.disabled=true;out.textContent='';state.textContent='Comprobando; puede tardar hasta 45 segundos...';
+ const code=choice.value,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
+ report={phoneDiagnosticVersion:1,option:code==='tm9efwej4bv8'?'Español Latino':'Subtitulado',requestContext:'browser_default_headers_not_nuvio',playbackVerified:false,requests:[],status:'running',limitation:'No determina por sí sola si el bloqueo depende de IP o cabeceras. Errores de fetch no identifican un estado HTTP. Sin URLs firmadas en este resumen.'};
+ try{
+  const data=JSON.parse(new TextDecoder().decode(await sample('/eagle-latin-blue/stream/movie/pelisprobe-live-idiotas.json?phoneProbe='+Date.now(),'addon_sources',524288,controller.signal)));
+  const child=(Array.isArray(data.streams)?data.streams:[]).filter(s=>String(s.name||'').includes('VidhidePro')).map(s=>safe(s.url)).find(u=>childAllowed(u,code));
+  if(!child)throw Error('vidhide_option_not_returned');
+  const text=new TextDecoder().decode(await sample(child.href,'media_playlist',262144,controller.signal));
+  if(/cf-chl-|g-recaptcha|h-captcha|altcha-widget|verify you are human/i.test(text))throw Error('verification_required');
+  const segment=firstSegment(text,child),bytes=await sample(segment.href,'first_segment',4096,controller.signal,true);
+  let sync=false;for(let i=0;i<188&&i+376<bytes.length;i++)if(bytes[i]===71&&bytes[i+188]===71&&bytes[i+376]===71){sync=true;break;}
+  report.transportStreamSyncObserved=sync;report.status=sync?'phone_segment_sample_observed_playback_unverified':'phone_sample_received_transport_unconfirmed';
+ }catch(e){const known=new Set(['unsupported_playlist','unsafe_segment_reference','too_many_segments','no_segment','http_rejection','response_limit_reached','vidhide_option_not_returned','verification_required']);report.status='not_conclusive';report.error=known.has(e.message)?e.message:e.name==='AbortError'?'timeout':'browser_request_not_observable';}
+ finally{clearTimeout(timer);state.textContent='Prueba terminada. Copia el resultado para revisarlo; no contiene enlaces firmados.';out.textContent=JSON.stringify(report,null,2);run.disabled=false;choice.disabled=false;copy.disabled=false;}
+};
+copy.onclick=async()=>{try{await navigator.clipboard.writeText(out.textContent);state.textContent='Resultado copiado.';}catch{state.textContent='Mantén pulsado el resultado y selecciona Copiar.';}};
+</script></html>
