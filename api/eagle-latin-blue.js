@@ -9,7 +9,7 @@ module.exports=async(req,res)=>{
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
   if(!['GET','HEAD'].includes(req.method)){res.setHeader('Allow','GET, HEAD, OPTIONS');return send(405,{streams:[],error:'only_get_or_head'});}
   if(req.method==='HEAD')return send(200,{});
-  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:9,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
+  try{return send(200,audit?await inspectHosts():match[1]==='pelisprobe-live-idiotas'?await resolveIdiotas(match[1]):await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:10,addonVersion:'0.5.3',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
  }
  const end=res.end;
  res.end=function(chunk,...args){
@@ -17,8 +17,8 @@ module.exports=async(req,res)=>{
    try{
     const data=JSON.parse(Buffer.isBuffer(chunk)?chunk.toString('utf8'):String(chunk));let changed=false;
     if(data.id==='org.nebulaplay.pelis.isolated'){
-     data.id='org.eaglelatinblue.pelis';data.name='Eagle Latin Blue';data.version='0.5.2';
-     data.description='Películas de PelisPlusHD con portada y búsqueda. Hasta 20 candidatos StreamWish/Hanerix por película, ordenados por resolución declarada en HLS. Otros servidores pendientes. No garantiza calidad visual ni todas las fuentes.';
+     data.id='org.eaglelatinblue.pelis';data.name='Eagle Latin Blue';data.version='0.5.3';
+     data.description='Películas de PelisPlusHD con portada y búsqueda. Hasta 20 candidatos StreamWish/Hanerix, ordenados por resolución declarada. VidhidePro experimental solo en Idiotas, sin reproducción verificada. Voe excluido. No garantiza calidad visual ni todas las fuentes.';
      if(Array.isArray(data.catalogs))data.catalogs=data.catalogs.map(c=>({...c,name:c.id==='pelis-isolated'?'Eagle Latin Blue - Pruebas':c.id==='pelis-live'?'Eagle Latin Blue - Películas':c.name}));changed=true;
     }
     if(Array.isArray(data.streams)){data.streams=data.streams.map(s=>({...s,name:String(s.name||'').startsWith('Pelis - ')?'Eagle Latin Blue - '+s.name.slice(8):s.name}));changed=true;}
@@ -29,8 +29,15 @@ module.exports=async(req,res)=>{
  };
  return original(req,res);
 };
+async function resolveIdiotas(id){
+ const [baseResult,testResult]=await Promise.allSettled([sources(id),inspectHosts(true)]);
+ const test=testResult.status==='fulfilled'?testResult.value:null,extra=Array.isArray(test?.experimentalStreams)?test.experimentalStreams:[];
+ if(baseResult.status==='rejected'&&!extra.length)throw baseResult.reason;
+ const base=baseResult.status==='fulfilled'?baseResult.value:{streams:[]};
+ return {...base,streams:[...(Array.isArray(base.streams)?base.streams:[]),...extra],vidhideTestReport:{addonVersion:'0.5.3',experimental:true,movieId:id,returned:extra.length,playbackVerified:false,delivery:'direct_cdn_with_unverified_client_header_hints',originalSourceError:baseResult.status==='rejected'?diagnosticError(baseResult.reason):null,inspectionStatus:test?.status||'inspection_failed',checks:(test?.playerChecks||[]).map(p=>({label:p.label,status:p.status,segmentReferenceValidation:p.segmentReferenceValidation||null})),notice:'Opciones VidhidePro de prueba añadidas después de las fuentes originales. URLs frescas, sin caché ni proxy de vídeo. La compatibilidad de cabeceras y reproducción requiere comprobarse en Nuvio.'}};
+}
 function diagnosticError(e){return e.name==='TimeoutError'||e.name==='AbortError'?'request_timeout':e.name==='TypeError'?'network_or_parse_error':e.message==='diagnostic_deadline'?'diagnostic_deadline':'inspection_error';}
-async function inspectHosts(){
+async function inspectHosts(includeStreams=false){
  const PAGE='https://pelisplushd.la/pelicula/idiotas',started=Date.now(),deadline=started+22000;
  const players=[{code:'tm9efwej4bv8',label:'Español Latino'},{code:'h7lvwnfyrtnj',label:'Subtitulado'}].map(p=>({...p,url:'https://vidhidepro.com/v/'+p.code,chainUrls:['https://vidhidepro.com/v/'+p.code,'https://vidhidefast.com/v/'+p.code,'https://callistanise.com/v/'+p.code]}));
  const pageUrls=new Set([PAGE,...players.flatMap(p=>p.chainUrls)]);
@@ -92,6 +99,23 @@ async function inspectHosts(){
   for(const rawLine of body.split(/\r?\n/)){const line=rawLine.trim();if(!line)continue;if(line.startsWith('#EXT-X-STREAM-INF:')){pending=true;continue;}if(pending&&!line.startsWith('#'))return line;}
   return null;
  }
+ function validateSegments(body,child){
+  if(!/^\uFEFF?\s*#EXTM3U(?:\s|$)/.test(body)||!/#EXT-X-ENDLIST(?:\s|$)/.test(body))throw Error('media_playlist_required');
+  const directory=child.pathname.slice(0,child.pathname.lastIndexOf('/')+1);let count=0,entries=0;
+  for(const rawLine of body.split(/\r?\n/)){
+   const line=rawLine.trim();if(!line)continue;
+   if(line.startsWith('#')){
+    if(/^#EXTINF:/.test(line))entries++;
+    if(/^#EXT-X-(?:KEY|SESSION-KEY|MAP|DEFINE|CONTENT-STEERING|STREAM-INF|I-FRAMES-ONLY)(?::|$)/.test(line)||/\b[A-Z0-9-]*URI\s*=/.test(line))throw Error('unsupported_media_dependency');
+    continue;
+   }
+   if(line.includes('{$'))throw Error('unresolved_media_variable');
+   const u=new URL(line,child);
+   if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||u.search.length>2048||u.origin!==child.origin||!u.pathname.startsWith(directory)||!/^[A-Za-z0-9_-]{1,160}\.ts$/.test(u.pathname.slice(directory.length)))throw Error('segment_destination_not_allowed');
+   count++;if(count>10000)throw Error('segment_count_limit');
+  }
+  if(!count||count!==entries)throw Error('segment_count_mismatch');return count;
+ }
  function unpackLinks(script){
   if(script.length>12000)throw Error('packed_script_too_large');
   const m=script.match(/\}\('((?:\\.|[^'\\])*)',36,([0-9]{1,4}),'((?:\\.|[^'\\])*)'\.split\('\|'\)\)/);if(!m)throw Error('packed_format_not_supported');
@@ -100,7 +124,9 @@ async function inspectHosts(){
   const unpacked=unescape(m[1]).replace(/\b[0-9a-z]+\b/g,t=>{const i=parseInt(t,36);return i<dict.length&&dict[i]?dict[i]:t;});
   const obj=unpacked.match(/\bvar\s+links\s*=\s*(\{[^;]*?\});/);if(!obj)throw Error('packed_links_missing');return JSON.parse(obj[1]);
  }
- const out={diagnosticVersion:9,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,excludedHosts:['voe.sx','ashleyhardat.com'],limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:2,redirectHopsPerPlayer:2,masterPlaylistsPerPlayer:1,normalChildPlaylistsPerPlayer:1,manifestBytes:262144,manifestRedirectHops:0,segments:0,keys:0},movieAttempts:[],playerChecks:[]};let root;
+ const out={diagnosticVersion:10,addonVersion:'0.5.3',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,excludedHosts:['voe.sx','ashleyhardat.com'],limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:2,redirectHopsPerPlayer:2,masterPlaylistsPerPlayer:1,normalChildPlaylistsPerPlayer:1,manifestBytes:262144,manifestRedirectHops:0,segments:0,keys:0},movieAttempts:[],playerChecks:[]};
+ if(includeStreams)out.experimentalStreams=[];
+ let root;
  for(let attempt=1;attempt<=2;attempt++){
   const t=Date.now();try{root=await read(PAGE,1000000);out.movieAttempts.push({attempt,httpStatus:root.httpStatus,elapsedMs:Date.now()-t});break;}
   catch(e){const error=diagnosticError(e);out.movieAttempts.push({attempt,error,elapsedMs:Date.now()-t});if(!['request_timeout','network_or_parse_error'].includes(error)||attempt===2)return {...out,status:error==='request_timeout'?'movie_page_timeout':'movie_page_read_failed',error,elapsedMs:Date.now()-started};}
@@ -143,11 +169,23 @@ async function inspectHosts(){
    const child=rawChild&&!rawChild.includes('{$')?url(rawChild,master.href):null;
    if(!childAllowed(child,master,p.code))return {...result,status:'normal_child_not_allowed'};
    const childResponse=await read(child.href,262144,{kind:'child',master,code:p.code});
-   result.manifestChecks.push({kind:'normal_child',...hlsSummary(childResponse,child)});
-   result.status='master_and_child_inspected_playback_unverified';return result;
+   const childCheck={kind:'normal_child',...hlsSummary(childResponse,child)};result.manifestChecks.push(childCheck);
+   result.status='master_and_child_inspected_playback_unverified';
+   if(childCheck.status==='hls_structure_observed_playback_unverified'&&childCheck.playlistType==='media'){
+    try{
+     const count=validateSegments(childResponse.body,child);
+     result.segmentReferenceValidation={status:'all_references_validated',count,segmentsRequested:0,playbackVerified:false};
+     if(includeStreams){
+      const q=masterCheck.variants[0]||{},resolution=q.width&&q.height?q.width+'x'+q.height+' declarada en HLS':'Resolución no declarada';
+      out.experimentalStreams.push({name:'Eagle Latin Blue - VidhidePro '+p.label+(q.height?' '+q.height+'p':'')+' (prueba)',title:'Idiotas | '+p.label+' (etiqueta de la ficha) | '+resolution+' | VidhidePro experimental; reproducción no verificada',url:child.href,behaviorHints:{notWebReady:true,proxyHeaders:{request:{Referer:'https://callistanise.com/v/'+p.code,'User-Agent':'EagleLatinBlue/0.5'}}}});
+     }
+    }catch{result.segmentReferenceValidation={status:'validation_failed',error:'media_reference_validation_failed',segmentsRequested:0};}
+   }
+   return result;
   }catch(e){return {...result,status:'inspection_failed',error:diagnosticError(e)};}
  }));
+ if(includeStreams)out.experimentalStreams.sort((a,b)=>a.name.localeCompare(b.name));
  out.status='inspection_complete';out.elapsedMs=Date.now()-started;
- out.notice='Solo VidhidePro para los dos vídeos de Idiotas. Voe excluido. Extrae enlaces frescos por sustitución estática, sin ejecutar scripts. Maestra hls2 limitada a subdominios alfanuméricos de 8 a 32 caracteres de acek-cdn.com o dramiyos-cdn.com y ruta hls2 vinculada al identificador del vídeo. Una variante normal del mismo dominio y directorio por vídeo, sin redirecciones de manifiestos ni solicitudes de I-frames, segmentos o claves. Se detiene ante verificación humana. Mantiene siete segundos por lectura y 22 totales. No añade fuentes ni altera reproducción; hls3 no se solicita. Resultados resumidos sin scripts completos ni rutas o consultas de recursos. Necesidad de cabeceras y reproducción aún no verificadas.';
+ out.notice='Solo VidhidePro para los dos vídeos de Idiotas. Voe excluido. Enlaces frescos por sustitución estática, sin ejecutar scripts. Maestra hls2 limitada a subdominios alfanuméricos de 8 a 32 caracteres de acek-cdn.com o dramiyos-cdn.com y ruta vinculada al vídeo. Una variante normal del mismo dominio y directorio por vídeo. Valida todas sus referencias TS antes de ofrecer una opción experimental, sin descargar segmentos ni claves. Se detiene ante verificación. Siete segundos por lectura y 22 totales. El endpoint de diagnóstico no añade fuentes. La ruta normal de Idiotas puede añadir hasta dos opciones directas de prueba después de las fuentes originales; otras películas no cambian. Compatibilidad de cabeceras y reproducción en Nuvio no verificadas. Sin proxy de vídeo, caché de enlaces ni solicitudes hls3.';
  return out;
 }
