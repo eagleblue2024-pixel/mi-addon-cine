@@ -9,7 +9,7 @@ module.exports=async(req,res)=>{
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
   if(!['GET','HEAD'].includes(req.method)){res.setHeader('Allow','GET, HEAD, OPTIONS');return send(405,{streams:[],error:'only_get_or_head'});}
   if(req.method==='HEAD')return send(200,{});
-  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:6,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
+  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:7,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
  }
  const end=res.end;
  res.end=function(chunk,...args){
@@ -40,17 +40,27 @@ async function inspectHosts(){
   ['https://vidhidefast.com/v/tm9efwej4bv8','https://callistanise.com/v/tm9efwej4bv8'],
   ['https://vidhidefast.com/v/h7lvwnfyrtnj','https://callistanise.com/v/h7lvwnfyrtnj']
  ]);
+ const manifestHosts=new Map([
+  ['https://vidhidepro.com/v/tm9efwej4bv8',{hls2:'wt4pjiive9agjpl.dramiyos-cdn.com',hls3:'wt4pjiive9agjpl.starlakecreativeworks.sbs'}],
+  ['https://vidhidepro.com/v/h7lvwnfyrtnj',{hls2:'yxqc9c2vqj7vepbl.acek-cdn.com',hls3:'yxqc9c2vqj7vepbl.riverrundesigncollect.store'}]
+ ]);
  const initialPlayers=new Set([...destinations.keys()].slice(0,4));
  const allowed=new Set([PAGE,...destinations.keys(),...destinations.values()]);
  const decode=s=>String(s||'').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/\\\//g,'/');
  const text=s=>decode(s).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,250);
  function attrs(s){const a={};for(const m of s.matchAll(/([\w-]+)\s*=\s*(["'])([\s\S]*?)\2/g))a[m[1].toLowerCase()]=decode(m[3]);return a;}
  function https(raw,base){try{const u=new URL(decode(raw),base);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port?u:null;}catch{return null;}}
- async function read(raw,max){
-  const u=https(raw,PAGE);if(!u||!allowed.has(u.href))throw Error('diagnostic_destination_not_allowed');
+ function manifestAllowed(u,context){
+  const hosts=manifestHosts.get(context);if(!u||!hosts||u.hash||u.search.length>2048||u.pathname.length>256||!/^[A-Za-z0-9_./-]+$/.test(u.pathname))return false;
+  const code=context.split('/').pop();if(!u.pathname.split('/').includes(code+'_n'))return false;
+  return u.hostname===hosts.hls2&&u.pathname.endsWith('/master.m3u8')||u.hostname===hosts.hls3&&u.pathname.endsWith('/master.txt');
+ }
+ async function read(raw,max,manifestContext=null){
+  const u=https(raw,PAGE);if(!u||!(manifestContext?manifestAllowed(u,manifestContext):allowed.has(u.href)))throw Error('diagnostic_destination_not_allowed');
   const remaining=deadline-Date.now();if(remaining<=0)throw Error('diagnostic_deadline');
   const requestStarted=Date.now(),signal=AbortSignal.timeout(Math.min(7000,remaining));
-  const r=await fetch(u.href,{redirect:'manual',signal,headers:{Accept:'text/html, application/vnd.apple.mpegurl, text/plain','User-Agent':'EagleLatinBlue/0.5',Referer:u.href===PAGE?'https://pelisplushd.la/':PAGE}});
+  const referer=manifestContext?destinations.get(destinations.get(manifestContext)):u.href===PAGE?'https://pelisplushd.la/':PAGE;
+  const r=await fetch(u.href,{redirect:'manual',signal,headers:{Accept:'text/html, application/vnd.apple.mpegurl, text/plain','User-Agent':'EagleLatinBlue/0.5',Referer:referer}});
   const chunks=[];let size=0,complete=false;
   if(r.body){const reader=r.body.getReader();try{while(size<max){const {done,value}=await reader.read();if(done){complete=true;break;}const p=value.subarray(0,max-size);chunks.push(Buffer.from(p));size+=p.length;}}finally{await reader.cancel().catch(()=>{});}}
   const html=Buffer.concat(chunks).toString('utf8'),location=r.headers.get('location');
@@ -67,7 +77,38 @@ async function inspectHosts(){
   }
   return targets.size===1?[...targets][0]:null;
  }
- const out={diagnosticVersion:6,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:2,voeRedirectHopsPerPlayer:1},movieAttempts:[],playerChecks:[]};let root;
+ function unpackLinks(script){
+  if(script.length>12000)throw Error('packed_script_too_large');
+  const m=script.match(/\}\('((?:\\.|[^'\\])*)',36,([0-9]{1,4}),'((?:\\.|[^'\\])*)'\.split\('\|'\)\)/);
+  if(!m)throw Error('packed_format_not_supported');
+  const unescape=s=>s.replace(/\\(['\\])/g,'$1'),count=Number(m[2]),dict=unescape(m[3]).split('|');
+  if(!count||count>1000||dict.length!==count)throw Error('packed_dictionary_not_supported');
+  const unpacked=unescape(m[1]).replace(/\b[0-9a-z]+\b/g,t=>{const i=parseInt(t,36);return i<dict.length&&dict[i]?dict[i]:t;});
+  const obj=unpacked.match(/\bvar\s+links\s*=\s*(\{[^;]*?\});/);if(!obj)throw Error('packed_links_missing');
+  return JSON.parse(obj[1]);
+ }
+ async function checkManifest(kind,raw,p){
+  const base={kind,playbackVerified:false,segmentsRequested:0};
+  const u=typeof raw==='string'?https(raw,p.url):null;
+  if(!manifestAllowed(u,p.url)||u.hostname!==manifestHosts.get(p.url)?.[kind])return {...base,status:'manifest_destination_not_allowed'};
+  base.host=u.hostname;base.file=u.pathname.split('/').pop();
+  try{
+   const r=await read(u.href,262144,p.url);
+   const result={...base,httpStatus:r.httpStatus,contentType:r.contentType,sampledBytes:r.sampledBytes,possiblyTruncated:r.possiblyTruncated,elapsedMs:r.elapsedMs};
+   if(r.verificationSignals)return {...result,status:'verification_required'};
+   if(r.httpStatus>=300&&r.httpStatus<400)return {...result,status:'manifest_redirect_not_followed'};
+   if(r.httpStatus!==200||r.possiblyTruncated)return {...result,status:'manifest_not_usable'};
+   if(!/^\uFEFF?\s*#EXTM3U(?:\s|$)/.test(r.html))return {...result,status:'not_hls'};
+   const declarations=r.html.split(/\r?\n/).filter(line=>/^\s*#EXT-X-STREAM-INF:/.test(line));
+   const variants=declarations.slice(0,20).map(line=>{
+    const resolution=line.match(/(?:[:,])\s*RESOLUTION=([0-9]{1,5})x([0-9]{1,5})(?:,|\s*$)/i),bandwidth=line.match(/(?:[:,])\s*BANDWIDTH=([0-9]{1,10})(?:,|\s*$)/i);
+    return {width:resolution?Number(resolution[1]):null,height:resolution?Number(resolution[2]):null,bandwidth:bandwidth?Number(bandwidth[1]):null};
+   });
+   const mediaPlaylist=/#EXTINF:/.test(r.html);
+   return {...result,status:declarations.length||mediaPlaylist?'hls_structure_observed_playback_unverified':'hls_header_only_or_unrecognized',playlistType:declarations.length?'master':mediaPlaylist?'media':'unknown',declaredVariantCount:declarations.length,variants,qualityBasis:'playlist_declarations_only',uriAttributesPresent:/\bURI\s*=/.test(r.html)};
+  }catch(e){return {...base,status:'manifest_inspection_failed',error:diagnosticError(e)};}
+ }
+ const out={diagnosticVersion:7,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:2,voeRedirectHopsPerPlayer:1,manifestsPerVidhidePlayer:2,manifestBytes:262144,manifestRedirectHops:0,segments:0},movieAttempts:[],playerChecks:[]};let root;
  for(let attempt=1;attempt<=2;attempt++){
   const attemptStarted=Date.now();
   try{root=await read(PAGE,1000000);out.movieAttempts.push({attempt,httpStatus:root.httpStatus,elapsedMs:Date.now()-attemptStarted});break;}
@@ -125,10 +166,21 @@ async function inspectHosts(){
    scripts.sort((a,b)=>b.score-a.score||a.index-b.index);
    result.scriptEvidence=scripts.slice(0,3).map(({body,...entry},rank)=>{const sampleLimitCharacters=rank===0?12000:3000;return {...entry,sampleLimitCharacters,truncated:body.length>sampleLimitCharacters,sample:body.slice(0,sampleLimitCharacters)};});
    result.scriptScan={totalScripts,eligibleScripts:scripts.length,selectedScripts:result.scriptEvidence.length,sampleLimitCharacters:12000,secondarySampleLimitCharacters:3000,totalSampleBudgetCharacters:18000,selection:'weighted_static_markers_not_execution'};
-   result.status=videos.size?'unverified_media_candidates_found':'no_plain_media_url_found';return result;
+   result.status=videos.size?'unverified_media_candidates_found':'no_plain_media_url_found';
+   if(manifestHosts.has(p.url)){
+    try{
+     const packed=scripts.find(s=>s.signals.includes('packed_or_encoded'));
+     if(!packed)throw Error('packed_script_missing');
+     const links=unpackLinks(packed.body);
+     result.packedExtraction={status:'links_extracted_statically',scriptIndex:packed.index,fields:['hls2','hls3'].filter(k=>typeof links[k]==='string')};
+     result.manifestChecks=await Promise.all(['hls2','hls3'].map(k=>checkManifest(k,links[k],p)));
+     result.status='manifest_inspection_complete_playback_unverified';
+    }catch(e){result.packedExtraction={status:'extraction_failed',error:diagnosticError(e)};}
+   }
+   return result;
   }catch(e){return {...p,finalUrl:current,chain,stage:'player_page',status:'inspection_failed',error:diagnosticError(e),elapsedMs:Date.now()-playerStarted,playbackVerified:false};}
  }));
  out.status=selected.length?'inspection_complete':'no_target_players_found';out.elapsedMs=Date.now()-started;
- out.notice='Diagnóstico de Idiotas limitado a cuatro URLs originales y sus destinos exactos observados. Hasta dos saltos HTTP en VidhidePro y uno en Voe; el literal JavaScript solo se considera en la página original, sin ejecutarlo. Cada salto exige la pareja exacta origen-destino autorizada. Se detiene ante verificación humana. No envía cookies ni tokens, descarga medios ni añade fuentes. Siete segundos por lectura, presupuesto total 22 segundos. No reintenta bloqueos HTTP o CAPTCHA. Reproducción sin cambios. Evidencia estática: prioriza configuración y código empaquetado; una muestra de hasta 12000 caracteres y otras dos de hasta 3000, máximo total 18000 por reproductor, sin solicitar scripts externos.';
+ out.notice='Diagnóstico de Idiotas: páginas y destinos exactos observados, dos saltos HTTP en VidhidePro y uno en Voe. Se detiene ante verificación. Extrae el objeto links por sustitución estática, sin ejecutar JavaScript. Solo permite los cuatro hosts de manifiestos observados, vinculados al vídeo y archivo master; hasta dos manifiestos de 262144 bytes por vídeo Vidhide, sin seguir redirecciones ni solicitar variantes, segmentos o claves. Siete segundos por lectura y 22 segundos totales. No añade fuentes ni cambia reproducción. La estructura HLS y resolución declarada no prueban reproducción ni calidad visual. Evidencia de scripts limitada a 18000 caracteres por reproductor.';
  return out;
 }
