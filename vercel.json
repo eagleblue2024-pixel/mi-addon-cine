@@ -1,6 +1,7 @@
 {
   "version": 2,
   "rewrites": [
+    {"source": "/eagle-latin-blue/:path*", "destination": "/api/eagle-latin-blue?addonRoute=:path*"},
     {"source": "/pelis-demo/:path*", "destination": "/api/pelis-host-test?addonRoute=:path*"},
     {"source": "/nebula/:path*", "destination": "/api/nebula-extra?route=:path*"},
     {"source": "/juanita-demo/:path*", "destination": "/api/nebula-play?route=:path*"},
