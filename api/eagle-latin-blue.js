@@ -9,7 +9,7 @@ module.exports=async(req,res)=>{
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
   if(!['GET','HEAD'].includes(req.method)){res.setHeader('Allow','GET, HEAD, OPTIONS');return send(405,{streams:[],error:'only_get_or_head'});}
   if(req.method==='HEAD')return send(200,{});
-  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:7,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
+  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:8,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
  }
  const end=res.end;
  res.end=function(chunk,...args){
@@ -87,6 +87,31 @@ async function inspectHosts(){
   const obj=unpacked.match(/\bvar\s+links\s*=\s*(\{[^;]*?\});/);if(!obj)throw Error('packed_links_missing');
   return JSON.parse(obj[1]);
  }
+ function summarizeReferences(body,baseUrl){
+  const base=new URL(baseUrl),references=[],tagCounts=Object.create(null);let count=0,pendingVariant=false;
+  const describe=raw=>{
+   const relative=!/^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw)&&!raw.startsWith('//');
+   if(raw.includes('{$'))return {relative,unresolvedVariables:true,requested:false};
+   try{
+    const u=new URL(raw,base),web=['https:','http:'].includes(u.protocol);
+    return {relative,protocol:u.protocol,host:web?u.hostname:null,sameOrigin:web&&u.origin===base.origin,sameDirectory:web&&u.origin===base.origin&&u.pathname.startsWith(base.pathname.slice(0,base.pathname.lastIndexOf('/')+1)),extension:u.pathname.match(/\.([A-Za-z0-9]{1,8})$/)?.[1]||null,queryPresent:Boolean(u.search),fragmentPresent:Boolean(u.hash),credentialsPresent:Boolean(u.username||u.password),nonDefaultPort:Boolean(u.port),requested:false};
+   }catch{return {relative,invalidUrl:true,requested:false};}
+  };
+  const add=(entry,raw)=>{count++;if(references.length<40)references.push({...entry,target:describe(raw)});};
+  for(const rawLine of body.split(/\r?\n/)){
+   const line=rawLine.trim();if(!line)continue;
+   if(!line.startsWith('#')){add({kind:pendingVariant?'variant_playlist':'untagged_reference'},line);pendingVariant=false;continue;}
+   const tag=line.split(':',1)[0];if(!/^#EXT[A-Z0-9-]*$/.test(tag))continue;
+   if(Object.hasOwn(tagCounts,tag)||Object.keys(tagCounts).length<50)tagCounts[tag]=(tagCounts[tag]||0)+1;
+   if(tag==='#EXT-X-STREAM-INF')pendingVariant=true;
+   const colon=line.indexOf(':');if(colon<0)continue;
+   const a=Object.create(null);
+   for(const m of line.slice(colon+1).matchAll(/([A-Z0-9-]+)\s*=\s*("[^"]*"|[^,]*)/g))a[m[1]]=m[2].startsWith('"')?m[2].slice(1,-1):m[2].trim();
+   const metadata={};for(const key of ['TYPE','GROUP-ID','NAME','LANGUAGE','DEFAULT','AUTOSELECT','METHOD','KEYFORMAT','AUDIO','SUBTITLES','CLOSED-CAPTIONS'])if(Object.hasOwn(a,key))metadata[key]=a[key].replace(/[\u0000-\u001f\u007f]/g,'').slice(0,120);
+   for(const key of Object.keys(a))if(key==='URI'||key.endsWith('-URI'))add({kind:'uri_attribute',tag,attribute:key,metadata},a[key]);
+  }
+  return {tagCounts,referenceCount:count,references,referencesTruncated:count>references.length,resourceRequests:0,headerRequirements:'not_determined_by_static_inspection',urlDetails:'hosts_and_structure_only_paths_queries_and_credentials_omitted'};
+ }
  async function checkManifest(kind,raw,p){
   const base={kind,playbackVerified:false,segmentsRequested:0};
   const u=typeof raw==='string'?https(raw,p.url):null;
@@ -105,10 +130,10 @@ async function inspectHosts(){
     return {width:resolution?Number(resolution[1]):null,height:resolution?Number(resolution[2]):null,bandwidth:bandwidth?Number(bandwidth[1]):null};
    });
    const mediaPlaylist=/#EXTINF:/.test(r.html);
-   return {...result,status:declarations.length||mediaPlaylist?'hls_structure_observed_playback_unverified':'hls_header_only_or_unrecognized',playlistType:declarations.length?'master':mediaPlaylist?'media':'unknown',declaredVariantCount:declarations.length,variants,qualityBasis:'playlist_declarations_only',uriAttributesPresent:/\bURI\s*=/.test(r.html)};
+   return {...result,status:declarations.length||mediaPlaylist?'hls_structure_observed_playback_unverified':'hls_header_only_or_unrecognized',playlistType:declarations.length?'master':mediaPlaylist?'media':'unknown',declaredVariantCount:declarations.length,variants,qualityBasis:'playlist_declarations_only',uriAttributesPresent:/\bURI\s*=/.test(r.html),referenceAnalysis:summarizeReferences(r.html,u.href)};
   }catch(e){return {...base,status:'manifest_inspection_failed',error:diagnosticError(e)};}
  }
- const out={diagnosticVersion:7,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:2,voeRedirectHopsPerPlayer:1,manifestsPerVidhidePlayer:2,manifestBytes:262144,manifestRedirectHops:0,segments:0},movieAttempts:[],playerChecks:[]};let root;
+ const out={diagnosticVersion:8,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:2,voeRedirectHopsPerPlayer:1,manifestsPerVidhidePlayer:2,manifestBytes:262144,manifestRedirectHops:0,segments:0},movieAttempts:[],playerChecks:[]};let root;
  for(let attempt=1;attempt<=2;attempt++){
   const attemptStarted=Date.now();
   try{root=await read(PAGE,1000000);out.movieAttempts.push({attempt,httpStatus:root.httpStatus,elapsedMs:Date.now()-attemptStarted});break;}
@@ -181,6 +206,6 @@ async function inspectHosts(){
   }catch(e){return {...p,finalUrl:current,chain,stage:'player_page',status:'inspection_failed',error:diagnosticError(e),elapsedMs:Date.now()-playerStarted,playbackVerified:false};}
  }));
  out.status=selected.length?'inspection_complete':'no_target_players_found';out.elapsedMs=Date.now()-started;
- out.notice='Diagnóstico de Idiotas: páginas y destinos exactos observados, dos saltos HTTP en VidhidePro y uno en Voe. Se detiene ante verificación. Extrae el objeto links por sustitución estática, sin ejecutar JavaScript. Solo permite los cuatro hosts de manifiestos observados, vinculados al vídeo y archivo master; hasta dos manifiestos de 262144 bytes por vídeo Vidhide, sin seguir redirecciones ni solicitar variantes, segmentos o claves. Siete segundos por lectura y 22 segundos totales. No añade fuentes ni cambia reproducción. La estructura HLS y resolución declarada no prueban reproducción ni calidad visual. Evidencia de scripts limitada a 18000 caracteres por reproductor.';
+ out.notice='Diagnóstico de Idiotas: páginas y destinos exactos observados, dos saltos HTTP en VidhidePro y uno en Voe. Se detiene ante verificación. Extrae el objeto links por sustitución estática, sin ejecutar JavaScript. Solo permite los cuatro hosts de manifiestos observados, vinculados al vídeo y archivo master; hasta dos manifiestos de 262144 bytes por vídeo Vidhide, sin seguir redirecciones ni solicitar variantes, segmentos o claves. Siete segundos por lectura y 22 segundos totales. No añade fuentes ni cambia reproducción. La estructura HLS y resolución declarada no prueban reproducción ni calidad visual. Evidencia de scripts limitada a 18000 caracteres por reproductor. Resume hasta 40 referencias HLS sin solicitarlas; omite rutas, consultas y credenciales de esas referencias. Las cabeceras requeridas no se determinan por inspección estática.';
  return out;
 }
