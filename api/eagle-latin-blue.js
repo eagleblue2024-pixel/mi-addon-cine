@@ -9,7 +9,7 @@ module.exports=async(req,res)=>{
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
   if(!['GET','HEAD'].includes(req.method)){res.setHeader('Allow','GET, HEAD, OPTIONS');return send(405,{streams:[],error:'only_get_or_head'});}
   if(req.method==='HEAD')return send(200,{});
-  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:3,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
+  try{return send(200,audit?await inspectHosts():await sources(match[1]));}catch(e){if(audit)return send(200,{diagnosticVersion:4,addonVersion:'0.5.2',stage:'diagnostic',status:'inspection_failed',error:diagnosticError(e),streamsChanged:false,apiFunctionsAdded:0});return send(200,{streams:[],error:e.name==='TimeoutError'||e.name==='AbortError'?'source_timeout':e.name==='TypeError'?'source_fetch_or_parse_failed':e.message});}
  }
  const end=res.end;
  res.end=function(chunk,...args){
@@ -36,8 +36,11 @@ async function inspectHosts(){
   ['https://vidhidepro.com/v/tm9efwej4bv8','https://vidhidefast.com/v/tm9efwej4bv8'],
   ['https://vidhidepro.com/v/h7lvwnfyrtnj','https://vidhidefast.com/v/h7lvwnfyrtnj'],
   ['https://voe.sx/e/hhvcphfmwecr','https://ashleyhardat.com/e/hhvcphfmwecr'],
-  ['https://voe.sx/e/3lrlv7lusyuu','https://ashleyhardat.com/e/3lrlv7lusyuu']
+  ['https://voe.sx/e/3lrlv7lusyuu','https://ashleyhardat.com/e/3lrlv7lusyuu'],
+  ['https://vidhidefast.com/v/tm9efwej4bv8','https://callistanise.com/v/tm9efwej4bv8'],
+  ['https://vidhidefast.com/v/h7lvwnfyrtnj','https://callistanise.com/v/h7lvwnfyrtnj']
  ]);
+ const initialPlayers=new Set([...destinations.keys()].slice(0,4));
  const allowed=new Set([PAGE,...destinations.keys(),...destinations.values()]);
  const decode=s=>String(s||'').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/\\\//g,'/');
  const text=s=>decode(s).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,250);
@@ -64,7 +67,7 @@ async function inspectHosts(){
   }
   return targets.size===1?[...targets][0]:null;
  }
- const out={diagnosticVersion:3,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:1},movieAttempts:[],playerChecks:[]};let root;
+ const out={diagnosticVersion:4,addonVersion:'0.5.2',pageUrl:PAGE,stage:'movie_page',playbackVerified:false,streamsChanged:false,apiFunctionsAdded:0,limits:{perReadMs:7000,totalBudgetMs:22000,movieAttempts:2,players:4,redirectHopsPerPlayer:2,voeRedirectHopsPerPlayer:1},movieAttempts:[],playerChecks:[]};let root;
  for(let attempt=1;attempt<=2;attempt++){
   const attemptStarted=Date.now();
   try{root=await read(PAGE,1000000);out.movieAttempts.push({attempt,httpStatus:root.httpStatus,elapsedMs:Date.now()-attemptStarted});break;}
@@ -75,30 +78,33 @@ async function inspectHosts(){
  const selected=[],seen=new Set();
  for(const m of root.html.matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi)){
   const a=attrs(m[1]);if(!(a.class||'').split(/\s+/).includes('playurl')||!a['data-url'])continue;
-  const u=https(a['data-url'],PAGE);if(!u||!destinations.has(u.href)||seen.has(u.href))continue;
+  const u=https(a['data-url'],PAGE);if(!u||!initialPlayers.has(u.href)||seen.has(u.href))continue;
   seen.add(u.href);selected.push({url:u.href,server:u.hostname,label:text(a['data-name'])||null});if(selected.length>=4)break;
  }
  out.stage='player_pages';
  out.playerChecks=await Promise.all(selected.map(async p=>{
-  const playerStarted=Date.now(),chain=[];let current=p.url;
+  const playerStarted=Date.now(),chain=[],maxHops=p.server==='vidhidepro.com'?2:1;let current=p.url,redirectKind=null;
   try{
    let r=await read(current,500000);chain.push({url:current,...info(r)});
-   if(r.verificationSignals)return {...p,stage:'player_page',status:'verification_required',chain,playbackVerified:false};
-   if(r.possiblyTruncated)return {...p,stage:'player_page',status:'player_page_not_usable',chain,playbackVerified:false};
-   const httpRedirect=r.httpStatus>=300&&r.httpStatus<400;
-   const target=httpRedirect?r.redirectTarget:usable(r)?literalRedirect(r.html,current):null;
-   let redirectKind=null;
-   if(target){
-    if(target!==destinations.get(p.url))return {...p,stage:'player_page',status:'redirect_destination_not_allowed',chain,playbackVerified:false};
+   const snapshot=status=>({...p,...info(r),finalUrl:current,redirectKind,chain,stage:'player_page',title:text(r.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]),status,playbackVerified:false});
+   for(let hops=0;;hops++){
+    if(r.verificationSignals)return snapshot('verification_required');
+    if(r.possiblyTruncated)return snapshot('player_page_not_usable');
+    const httpRedirect=r.httpStatus>=300&&r.httpStatus<400;
+    const literal=usable(r)?literalRedirect(r.html,current):null;
+    const target=httpRedirect?r.redirectTarget:hops===0?literal:null;
+    if(!target){
+     if(httpRedirect)return snapshot('redirect_not_followed');
+     if(literal)return snapshot('redirect_hop_limit');
+     break;
+    }
+    if(hops>=maxHops)return snapshot('redirect_hop_limit');
+    if(target!==destinations.get(current))return snapshot('redirect_destination_not_allowed');
     redirectKind=httpRedirect?'http':'static_javascript_literal';current=target;
     r=await read(current,500000);chain.push({url:current,...info(r)});
-   }else if(httpRedirect)return {...p,stage:'player_page',status:'redirect_not_followed',chain,playbackVerified:false};
-   const result={...p,...info(r),finalUrl:current,redirectKind,chain,stage:'player_page',title:text(r.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]),status:'html_received',playbackVerified:false};
-   if(r.verificationSignals)return {...result,status:'verification_required'};
-   if(r.httpStatus>=300&&r.httpStatus<400)return {...result,status:'redirect_hop_limit'};
-   if(!usable(r))return {...result,status:'player_page_not_usable'};
-   if(chain.length===2&&literalRedirect(r.html,current))return {...result,status:'redirect_hop_limit'};
-   const videos=new Set();
+   }
+   if(!usable(r))return snapshot('player_page_not_usable');
+   const result=snapshot('html_received'),videos=new Set();
    for(const m of decode(r.html).matchAll(/https:\/\/[^\s"'<>\\`]+/gi)){const u=https(m[0],current);if(u&&/\.(?:m3u8|mp4|mpd)$/i.test(u.pathname))videos.add(u.href);if(videos.size>=10)break;}
    result.directMediaCandidates=[...videos].map(url=>({url,verified:false}));result.scriptEvidence=[];
    for(const m of r.html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)){
@@ -109,6 +115,6 @@ async function inspectHosts(){
   }catch(e){return {...p,finalUrl:current,chain,stage:'player_page',status:'inspection_failed',error:diagnosticError(e),elapsedMs:Date.now()-playerStarted,playbackVerified:false};}
  }));
  out.status=selected.length?'inspection_complete':'no_target_players_found';out.elapsedMs=Date.now()-started;
- out.notice='Diagnóstico de Idiotas limitado a cuatro URLs originales y sus cuatro destinos exactos observados. Un salto por reproductor, validado antes de solicitarlo; redirecciones HTTP manuales o extracción estática de un literal window.location.href, sin ejecutar JavaScript. No envía cookies ni tokens, descarga medios ni añade fuentes. Siete segundos por lectura, presupuesto total 22 segundos. No reintenta bloqueos HTTP o CAPTCHA. Reproducción sin cambios.';
+ out.notice='Diagnóstico de Idiotas limitado a cuatro URLs originales y sus destinos exactos observados. Hasta dos saltos HTTP en VidhidePro y uno en Voe; el literal JavaScript solo se considera en la página original, sin ejecutarlo. Cada salto exige la pareja exacta origen-destino autorizada. Se detiene ante verificación humana. No envía cookies ni tokens, descarga medios ni añade fuentes. Siete segundos por lectura, presupuesto total 22 segundos. No reintenta bloqueos HTTP o CAPTCHA. Reproducción sin cambios.';
  return out;
 }
