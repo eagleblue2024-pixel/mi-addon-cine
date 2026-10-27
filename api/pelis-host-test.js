@@ -1,24 +1,30 @@
 'use strict';
-const PAGE='https://hanerix.com/e/ejfrl3vz4rbs';
-const ORIGIN='https://mi-addon-cine.vercel.app';
-const HOSTS=new Set(['hanerix.com','cyyroro04xrqr.riskanalytics.cfd','cyyroro04xrqr.premilkyway.com']);
-function safe(raw){const u=new URL(raw,PAGE);if(u.protocol!=='https:'||u.port||u.username||u.password||!HOSTS.has(u.hostname))throw new Error('destination_not_allowed');return u.href;}
-async function read(url,max,origin=null,referer=PAGE){
- const headers={Accept:'*/*','User-Agent':'NebulaPlayDiagnostics/0.4'};if(origin)headers.Origin=origin;if(referer)headers.Referer=referer;
- const r=await fetch(safe(url),{redirect:'manual',signal:AbortSignal.timeout(6000),headers});
+const PAGE='https://hanerix.com/e/ejfrl3vz4rbs',API='/api/pelis-host-test';
+const CDNS=new Set(['p19-ad-site-sign-sg.tiktokcdn.com','p16-ad-site-sign-sg.tiktokcdn.com']);
+const TOKEN=/^[A-Za-z0-9_-]{16,128}$/,STAMP=/^[0-9]{10,12}$/;
+function params(token,stamp,file){if(!TOKEN.test(token)||!STAMP.test(stamp)||!['master.m3u8','index-v1-a1.m3u8'].includes(file))throw new Error('invalid_playlist_parameters');return {token,stamp,file};}
+function upstream(p){return 'https://hanerix.com/stream/'+p.token+'/kjhhiuahiuhgihdf/'+p.stamp+'/76097401/'+p.file;}
+function local(p){return API+'?'+new URLSearchParams({mode:'playlist',...p}).toString();}
+async function read(url,max){
+ const u=new URL(url);if(u.origin!=='https://hanerix.com')throw new Error('destination_not_allowed');
+ const r=await fetch(u.href,{redirect:'manual',signal:AbortSignal.timeout(8000),headers:{Accept:'*/*','User-Agent':'NebulaPlayDiagnostics/0.4',Referer:PAGE}});
  const parts=[];let size=0,complete=false;if(r.body){const reader=r.body.getReader();try{while(size<max){const {done,value}=await reader.read();if(done){complete=true;break;}const p=value.subarray(0,max-size);parts.push(Buffer.from(p));size+=p.length;}}finally{await reader.cancel().catch(()=>{});}}
- let redirectDestination=null;const location=r.headers.get('location');if(location){try{const u=new URL(location,url);redirectDestination={protocol:u.protocol,host:u.hostname};}catch{redirectDestination={invalid:true};}}
- return {ok:r.ok,httpStatus:r.status,contentType:r.headers.get('content-type'),sampledBytes:size,possiblyTruncated:!complete,text:Buffer.concat(parts).toString('utf8'),challenge:r.headers.get('cf-mitigated')==='challenge',accessControlAllowOrigin:r.headers.get('access-control-allow-origin'),accessControlAllowCredentials:r.headers.get('access-control-allow-credentials'),vary:r.headers.get('vary'),redirectDetected:r.status>=300&&r.status<400,redirectDestination};
+ return {ok:r.ok,status:r.status,contentType:r.headers.get('content-type'),text:Buffer.concat(parts).toString('utf8'),truncated:!complete,challenge:r.headers.get('cf-mitigated')==='challenge'};
 }
-function unpackLinks(html){const m=html.match(/\}\('((?:\\.|[^'\\])*)',36,(\d+),'([^']*)'\.split\('\|'\)/);if(!m||Number(m[2])>5000)throw new Error('packed_format_not_supported');const dict=m[3].split('|'),payload=m[1].replace(/\\(['\\])/g,'$1');const decoded=payload.replace(/\b[0-9a-z]+\b/g,t=>{const i=parseInt(t,36);return i<dict.length&&dict[i]?dict[i]:t;});const object=decoded.match(/\bvar\s+links\s*=\s*(\{[^;]*?\});/);if(!object)throw new Error('links_object_missing');const raw=JSON.parse(object[1]),links={};for(const k of ['hls4','hls3','hls2'])if(typeof raw[k]==='string'){try{links[k]=safe(raw[k]);}catch{}}return links;}
-async function check(url,label,origin,referer){try{const r=await read(url,4096,origin,referer);const {text,ok,challenge,...details}=r;const hls=ok&&!challenge&&/^\uFEFF?\s*#EXTM3U/.test(text);return {label,requestOrigin:origin,requestReferer:referer,...details,verificationDetected:challenge,startsWithEXTM3U:hls,status:hls?'hls_received':r.redirectDetected?'redirect_not_followed':'hls_not_confirmed',corsHeaderAllowsFixedOriginWithoutCredentials:r.accessControlAllowOrigin==='*'||r.accessControlAllowOrigin===ORIGIN};}catch(e){return {label,requestOrigin:origin,requestReferer:referer,status:'fetch_failed',errorType:e.name};}}
+function extract(html){const m=html.match(/\}\('((?:\\.|[^'\\])*)',36,(\d+),'([^']*)'\.split\('\|'\)/);if(!m||Number(m[2])>5000)throw new Error('packed_format_not_supported');const dict=m[3].split('|'),payload=m[1].replace(/\\(['\\])/g,'$1'),decoded=payload.replace(/\b[0-9a-z]+\b/g,t=>{const i=parseInt(t,36);return i<dict.length&&dict[i]?dict[i]:t;});const obj=decoded.match(/\bvar\s+links\s*=\s*(\{[^;]*?\});/);if(!obj)throw new Error('links_missing');const raw=JSON.parse(obj[1]);if(typeof raw.hls4!=='string')throw new Error('hls4_missing');const u=new URL(raw.hls4,PAGE);const path=u.pathname.match(/^\/stream\/([A-Za-z0-9_-]{16,128})\/kjhhiuahiuhgihdf\/([0-9]{10,12})\/76097401\/master\.m3u8$/);if(u.origin!=='https://hanerix.com'||u.username||u.password||u.search||u.hash||!path)throw new Error('unexpected_master');return params(path[1],path[2],'master.m3u8');}
+function rewrite(text,p){
+ if(!/^\uFEFF?\s*#EXTM3U/.test(text))throw new Error('not_hls');
+ if(/\bURI\s*=|#EXT-X-DEFINE:|#EXT-X-CONTENT-STEERING:/i.test(text))throw new Error('unsupported_uri_attribute');
+ const master=p.file==='master.m3u8';if(master&&!/#EXT-X-STREAM-INF:/.test(text))throw new Error('expected_master_playlist');if(!master&&/#EXT-X-STREAM-INF:/.test(text))throw new Error('nested_master_not_supported');
+ let references=0;const result=text.split(/\r?\n/).map(line=>{const s=line.trim();if(!s||s.startsWith('#'))return line;references++;const u=new URL(s,upstream(p));if(u.protocol!=='https:'||u.port||u.username||u.password||u.hash)throw new Error('unsafe_playlist_reference');
+ if(master){const child=params(p.token,p.stamp,'index-v1-a1.m3u8');if(u.href!==upstream(child))throw new Error('unexpected_variant');return local(child);}
+ if(!CDNS.has(u.hostname))throw new Error('segment_host_not_allowed');return u.href;}).join('\n');if(!references)throw new Error('empty_playlist');return result;
+}
 module.exports=async(req,res)=>{
- res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
- const out={diagnosticVersion:14,experimental:true,playbackVerified:false,pageUrl:PAGE,testedOrigin:ORIGIN,corsChecks:[],notice:'Solo HTML y hasta 4 KiB de la lista principal en cada una de tres consultas. Sustituye el muestreo PNG/TS de v13; no solicita variantes ni segmentos. Mantiene links.hls4. Las cabeceras observadas desde Vercel no reproducen toda la petición del dispositivo ni prueban por sí solas la causa del error del navegador. No sigue redirecciones, ejecuta scripts remotos ni modifica fuentes.'};
- const send=code=>{res.statusCode=code;res.end(JSON.stringify(out,null,2));};if(req.method!=='GET'){res.setHeader('Allow','GET');out.status='method_not_allowed';return send(405);}let stage='page';try{
- const page=await read(PAGE,1000000);if(page.challenge||/cf-chl-|g-recaptcha|altcha-widget|verify you are human/i.test(page.text)){out.status='verification_required';return send(200);}if(!page.ok||page.possiblyTruncated||!/text\/html/i.test(page.contentType||'')){out.status='page_not_usable';out.upstreamStatus=page.httpStatus;return send(200);}
- stage='extraction';out.links=unpackLinks(page.text);out.status=Object.keys(out.links).length?'links_extracted':'no_links';if(!out.links.hls4)return send(200);
- const u=new URL(out.links.hls4);if(u.origin!=='https://hanerix.com'||!u.pathname.startsWith('/stream/')||!u.pathname.endsWith('/master.m3u8'))throw new Error('expected_master_missing');
- stage='cors';out.corsChecks=await Promise.all([check(u.href,'baseline_without_origin',null,PAGE),check(u.href,'fixed_origin_with_page_referer',ORIGIN,PAGE),check(u.href,'fixed_origin_without_referer',ORIGIN,null)]);return send(200);
- }catch(e){out.failure={stage,reason:e.message,errorType:e.name};if(stage==='extraction')out.status='extraction_failed';return send(200);}
+ res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');const json=(code,data)=>{res.statusCode=code;res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify({diagnosticVersion:15,experimental:true,playbackVerified:false,videoProxied:false,...data},null,2));};
+ if(req.method!=='GET'){res.setHeader('Allow','GET');return json(405,{error:'only_get'});}const q=new URL(req.url,'https://addon.local').searchParams,mode=q.get('mode')||'resolve';
+ try{if(mode==='resolve'){const page=await read(PAGE,1000000);if(!page.ok||page.truncated||page.challenge||!/text\/html/i.test(page.contentType||'')||/cf-chl-|g-recaptcha|altcha-widget|verify you are human/i.test(page.text))return json(502,{error:'page_not_usable',upstreamStatus:page.status});const p=extract(page.text);return json(200,{status:'playlist_route_ready',playlistUrl:local(p),manifestsProxied:true,notice:'Solo video ejfrl3vz4rbs. Listas por Vercel; segmentos directos sin transformación. Sustituye diagnóstico CORS v14. No confirma reproducción.'});}
+ if(mode!=='playlist')return json(400,{error:'invalid_mode'});let p;try{p=params(q.get('token')||'',q.get('stamp')||'',q.get('file')||'');}catch{return json(400,{error:'invalid_playlist_parameters'});}
+ const r=await read(upstream(p),262144);if(!r.ok||r.truncated||r.challenge)return json(502,{error:'playlist_not_usable',upstreamStatus:r.status});const body=rewrite(r.text,p);res.statusCode=200;res.setHeader('Content-Type','application/vnd.apple.mpegurl; charset=utf-8');res.end(body);
+ }catch(e){return json(502,{error:e.name==='TimeoutError'?'upstream_timeout':e.name==='TypeError'?'fetch_or_parse_failed':e.message});}
 };
